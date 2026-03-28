@@ -31,10 +31,10 @@ struct ContentView: View {
             Divider()
 
             ScrollView {
-                Text(logs)
+                TextEditor(text: .constant(logs))
                     .font(.system(.body, design: .monospaced))
-                    .padding()
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(4)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .background(Color(NSColor.textBackgroundColor))
             .cornerRadius(6)
@@ -42,6 +42,13 @@ struct ContentView: View {
 
             HStack {
                 Spacer()
+                Button("Clear & Rebuild") {
+                    guard let url = selectedURL, !isBuilding else { return }
+                    logs = ""
+                    buildAndInstall(projectURL: url, clean: true)
+                }
+                .disabled(selectedURL == nil || isBuilding)
+
                 Button(action: {
                     guard let url = selectedURL, !isBuilding else { return }
                     buildAndInstall(projectURL: url)
@@ -57,10 +64,15 @@ struct ContentView: View {
                 .disabled(selectedURL == nil || isBuilding)
             }.padding()
         }
+        .onAppear {
+            if let url = BookmarkManager.restoreBookmark() {
+                selectedURL = url
+                appendLog("Restored: \(url.path)")
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .didSelectFolder)) { n in
             if let url = n.object as? URL {
-                selectedURL = url
-                appendLog("Selected: \(url.path)")
+                selectURL(url)
             }
         }
     }
@@ -72,10 +84,15 @@ struct ContentView: View {
         panel.allowsMultipleSelection = false
         panel.begin { resp in
             if resp == .OK, let url = panel.url {
-                selectedURL = url
-                appendLog("Selected: \(url.path)")
+                selectURL(url)
             }
         }
+    }
+
+    func selectURL(_ url: URL) {
+        selectedURL = url
+        appendLog("Selected: \(url.path)")
+        try? BookmarkManager.saveBookmark(for: url)
     }
 
     func appendLog(_ line: String) {
@@ -84,13 +101,13 @@ struct ContentView: View {
         }
     }
 
-    func buildAndInstall(projectURL: URL) {
-        appendLog("Starting build...")
+    func buildAndInstall(projectURL: URL, clean: Bool = false) {
+        appendLog(clean ? "Starting clean build..." : "Starting build...")
         isBuilding = true
 
         Task {
             let manager = BuildManager()
-            let result = await manager.buildProject(at: projectURL) { out in
+            let result = await manager.buildProject(at: projectURL, clean: clean) { out in
                 appendLog(out)
             }
             await MainActor.run {
@@ -99,12 +116,6 @@ struct ContentView: View {
             switch result {
             case .success(let appURL):
                 appendLog("Build succeeded: \(appURL.path)")
-                do {
-                    try Installer.installApp(at: appURL)
-                    appendLog("Installed to ~/Applications")
-                } catch {
-                    appendLog("Install failed: \(error.localizedDescription)")
-                }
             case .failure(let error):
                 appendLog("Build failed: \(error.localizedDescription)")
             }
